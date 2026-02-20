@@ -122,8 +122,7 @@ def convert_object(
             texmatrix = text_curve[1]
             text_object.matrix_world = texmatrix
     else:
-        blender_object = context.blend_data.objects.new(name+"_Instance", None)
-        utils.tag_data(blender_object, tags)
+        blender_object = utils.get_or_create_iddata(context.blend_data.objects, tags, None, use_none=True)
 
     blender_object.color = [x/255. for x in view_color]
 
