@@ -29,6 +29,14 @@ from mathutils import Matrix
 
 from typing import Any, Dict
 
+
+def _get_rhid(idblock):
+    """Return the rhid custom property, or None if absent or invalid."""
+    rhid = idblock.get("rhid", None)
+    if rhid is None or rhid == "None":
+        return None
+    return rhid
+
 def tag_data(
         idblock : bpy.types.ID,
         tag_dict: Dict[str, Any]
@@ -99,8 +107,8 @@ def reset_all_dict(context : bpy.types.Context) -> None:
             dct = dict()
             all_dict[t] = dct
         for item in base:
-            rhid = item.get('rhid', None)
-            if rhid:
+            rhid = _get_rhid(item)
+            if rhid is not None:
                 dct[rhid] = item
 
 def get_dict_for_base(base : bpy.types.bpy_prop_collection) -> Dict[str, bpy.types.ID]:
@@ -155,6 +163,8 @@ def get_or_create_iddata(
 
 def _collect_valid_guids(model):
     """Build a set of all valid GUIDs from the .3dm model."""
+    # Imported here to avoid circular import (material.py imports utils.py)
+    from .material import DEFAULT_RHINO_MATERIAL_ID, DEFAULT_RHINO_TEXT_MATERIAL_ID
     valid = set()
 
     for ob in model.Objects:
@@ -172,29 +182,43 @@ def _collect_valid_guids(model):
     for idef in model.InstanceDefinitions:
         valid.add(str(idef.Id))
 
-    # Default material GUIDs (from material.py)
-    valid.add("00000000-abcd-ef01-2345-000000000000")
-    valid.add("00000000-abcd-ef01-6789-000000000000")
+    valid.add(str(DEFAULT_RHINO_MATERIAL_ID))
+    valid.add(str(DEFAULT_RHINO_TEXT_MATERIAL_ID))
 
     return valid
+
+
+def _remove_stale_from(collection, valid_guids):
+    """Remove items from a Blender collection whose rhid is no longer valid."""
+    to_remove = []
+    for item in collection:
+        rhid = _get_rhid(item)
+        if rhid is None:
+            continue
+        if rhid not in valid_guids:
+            to_remove.append(item)
+    for item in to_remove:
+        collection.remove(item)
 
 
 def remove_stale_data(context, model):
     """Remove Blender data whose Rhino GUID is no longer in the .3dm file."""
     valid_guids = _collect_valid_guids(model)
 
-    # Collect set of rhids that survive (for annotation child check)
+    # Annotation text children (rhname starting with "TXT") have synthetic GUIDs
+    # that don't exist in the .3dm model. We keep them as long as their parent
+    # annotation object still exists, so we need the set of surviving parent rhids.
     surviving_rhids = set()
     for ob in context.blend_data.objects:
-        rhid = ob.get("rhid", None)
-        if rhid and rhid != "None" and rhid in valid_guids:
+        rhid = _get_rhid(ob)
+        if rhid is not None and rhid in valid_guids:
             surviving_rhids.add(rhid)
 
     # 1. Remove stale objects
     objects_to_remove = []
     for ob in context.blend_data.objects:
-        rhid = ob.get("rhid", None)
-        if rhid is None or rhid == "None":
+        rhid = _get_rhid(ob)
+        if rhid is None:
             continue
         if rhid in valid_guids:
             continue
@@ -202,7 +226,7 @@ def remove_stale_data(context, model):
         # These have rhname starting with "TXT" (set in converters/__init__.py).
         if (ob.get("rhname", "").startswith("TXT")
                 and ob.parent
-                and ob.parent.get("rhid", None) in surviving_rhids):
+                and _get_rhid(ob.parent) in surviving_rhids):
             continue
         objects_to_remove.append(ob)
 
@@ -222,29 +246,9 @@ def remove_stale_data(context, model):
             elif isinstance(data, bpy.types.Light):
                 context.blend_data.lights.remove(data)
 
-    # 2. Remove stale collections
-    collections_to_remove = []
-    for col in context.blend_data.collections:
-        rhid = col.get("rhid", None)
-        if rhid is None or rhid == "None":
-            continue
-        if rhid not in valid_guids:
-            collections_to_remove.append(col)
-
-    for col in collections_to_remove:
-        context.blend_data.collections.remove(col)
-
-    # 3. Remove stale materials
-    materials_to_remove = []
-    for mat in context.blend_data.materials:
-        rhid = mat.get("rhid", None)
-        if rhid is None or rhid == "None":
-            continue
-        if rhid not in valid_guids:
-            materials_to_remove.append(mat)
-
-    for mat in materials_to_remove:
-        context.blend_data.materials.remove(mat)
+    # 2. Remove stale collections and materials
+    _remove_stale_from(context.blend_data.collections, valid_guids)
+    _remove_stale_from(context.blend_data.materials, valid_guids)
 
 
 def matrix_from_xform(xform : r3d.Transform):
