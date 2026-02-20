@@ -39,6 +39,7 @@ from .pointcloud import import_pointcloud
 from .annotation import import_annotation
 
 from . import utils
+from .utils import remove_stale_data
 
 '''
 Dictionary mapping between the Rhino file types and importer functions

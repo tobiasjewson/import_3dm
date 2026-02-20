@@ -153,6 +153,100 @@ def get_or_create_iddata(
         tag_data(theitem, tag_dict)
     return theitem
 
+def _collect_valid_guids(model):
+    """Build a set of all valid GUIDs from the .3dm model."""
+    valid = set()
+
+    for ob in model.Objects:
+        valid.add(str(ob.Attributes.Id))
+
+    for layer in model.Layers:
+        valid.add(str(layer.Id))
+
+    for mat in model.Materials:
+        valid.add(str(mat.Id))
+        rc = model.RenderContent.FindId(mat.RenderMaterialInstanceId)
+        if rc:
+            valid.add(str(mat.RenderMaterialInstanceId))
+
+    for idef in model.InstanceDefinitions:
+        valid.add(str(idef.Id))
+
+    # Default material GUIDs (from material.py)
+    valid.add("00000000-abcd-ef01-2345-000000000000")
+    valid.add("00000000-abcd-ef01-6789-000000000000")
+
+    return valid
+
+
+def remove_stale_data(context, model):
+    """Remove Blender data whose Rhino GUID is no longer in the .3dm file."""
+    valid_guids = _collect_valid_guids(model)
+
+    # Collect set of rhids that survive (for annotation child check)
+    surviving_rhids = set()
+    for ob in context.blend_data.objects:
+        rhid = ob.get("rhid", None)
+        if rhid and rhid != "None" and rhid in valid_guids:
+            surviving_rhids.add(rhid)
+
+    # 1. Remove stale objects
+    objects_to_remove = []
+    for ob in context.blend_data.objects:
+        rhid = ob.get("rhid", None)
+        if rhid is None or rhid == "None":
+            continue
+        if rhid in valid_guids:
+            continue
+        # Skip annotation text children whose parent annotation still exists.
+        # These have rhname starting with "TXT" (set in converters/__init__.py).
+        if (ob.get("rhname", "").startswith("TXT")
+                and ob.parent
+                and ob.parent.get("rhid", None) in surviving_rhids):
+            continue
+        objects_to_remove.append(ob)
+
+    for ob in objects_to_remove:
+        data = ob.data
+        for col in ob.users_collection:
+            col.objects.unlink(ob)
+        context.blend_data.objects.remove(ob)
+        # Remove orphaned data blocks
+        if data and data.users == 0:
+            if isinstance(data, bpy.types.Mesh):
+                context.blend_data.meshes.remove(data)
+            elif isinstance(data, bpy.types.Curve):
+                context.blend_data.curves.remove(data)
+            elif isinstance(data, bpy.types.Camera):
+                context.blend_data.cameras.remove(data)
+            elif isinstance(data, bpy.types.Light):
+                context.blend_data.lights.remove(data)
+
+    # 2. Remove stale collections
+    collections_to_remove = []
+    for col in context.blend_data.collections:
+        rhid = col.get("rhid", None)
+        if rhid is None or rhid == "None":
+            continue
+        if rhid not in valid_guids:
+            collections_to_remove.append(col)
+
+    for col in collections_to_remove:
+        context.blend_data.collections.remove(col)
+
+    # 3. Remove stale materials
+    materials_to_remove = []
+    for mat in context.blend_data.materials:
+        rhid = mat.get("rhid", None)
+        if rhid is None or rhid == "None":
+            continue
+        if rhid not in valid_guids:
+            materials_to_remove.append(mat)
+
+    for mat in materials_to_remove:
+        context.blend_data.materials.remove(mat)
+
+
 def matrix_from_xform(xform : r3d.Transform):
      m = Matrix(
             ((xform.M00, xform.M01, xform.M02, xform.M03),

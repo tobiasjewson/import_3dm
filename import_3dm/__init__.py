@@ -221,6 +221,12 @@ class Import3dm(Operator, ImportHelper):
         default="ALL",
     ) # type: ignore
 
+    sync: BoolProperty(
+        name="Sync",
+        description="Remove objects, layers, and materials no longer present in the .3dm file",
+        default=False,
+    ) # type: ignore
+
     @classmethod
     def poll(cls, context: bpy.types.Context):
         return context.mode == "OBJECT"
@@ -292,6 +298,10 @@ class Import3dm(Operator, ImportHelper):
         col = box.column()
         col.enabled = self.merge_by_distance
         col.prop(self, "merge_distance")
+
+        box = layout.box()
+        box.label(text="Sync")
+        box.prop(self, "sync")
     
     def invoke(self, context, event):
         self.files = []
@@ -307,10 +317,8 @@ class IO_FH_3dm_import(bpy.types.FileHandler):
     @classmethod
     def poll_drop(cls, context):
         return poll_file_object_drop(context)
-
-
-
-
+ 
+ 
 # Only needed if you want to add into a dynamic menu
 def menu_func_import(self, _ : bpy.types.Context):
     self.layout.operator(Import3dm.bl_idname, text="Rhinoceros 3D (.3dm)")
