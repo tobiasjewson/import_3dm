@@ -221,9 +221,9 @@ class Import3dm(Operator, ImportHelper):
         default="ALL",
     ) # type: ignore
 
-    sync: BoolProperty(
-        name="Sync",
-        description="Remove objects, layers, and materials no longer present in the .3dm file",
+    remove_deleted: BoolProperty(
+        name="Remove Deleted",
+        description="Remove objects, layers, and materials from the Blender scene that are no longer present in the .3dm file. Warning: this may permanently delete data from your scene",
         default=False,
     ) # type: ignore
 
@@ -300,8 +300,8 @@ class Import3dm(Operator, ImportHelper):
         col.prop(self, "merge_distance")
 
         box = layout.box()
-        box.label(text="Sync")
-        box.prop(self, "sync")
+        box.label(text="Remove Deleted")
+        box.prop(self, "remove_deleted")
     
     def invoke(self, context, event):
         self.files = []

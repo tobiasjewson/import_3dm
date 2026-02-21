@@ -230,7 +230,7 @@ def read_3dm(
             bpy.ops.object.shade_smooth()
         bpy.context.view_layer.objects.active = active_object
 
-    if options.get("sync", False):
+    if options.get("remove_deleted", False):
         converters.remove_stale_data(context, model)
 
     converters.cleanup()
