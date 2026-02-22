@@ -227,6 +227,18 @@ class Import3dm(Operator, ImportHelper):
         default=False,
     ) # type: ignore
 
+    remove_hidden_objects: BoolProperty(
+        name="Include Hidden Objects",
+        description="When enabled, hidden objects in the .3dm file are also removed from the Blender scene",
+        default=False,
+    ) # type: ignore
+
+    remove_hidden_layers: BoolProperty(
+        name="Include Hidden Layers",
+        description="When enabled, objects on hidden layers in the .3dm file are also removed from the Blender scene",
+        default=False,
+    ) # type: ignore
+
     @classmethod
     def poll(cls, context: bpy.types.Context):
         return context.mode == "OBJECT"
@@ -302,6 +314,10 @@ class Import3dm(Operator, ImportHelper):
         box = layout.box()
         box.label(text="Remove Deleted")
         box.prop(self, "remove_deleted")
+        sub = box.column()
+        sub.active = self.remove_deleted
+        sub.prop(self, "remove_hidden_objects")
+        sub.prop(self, "remove_hidden_layers")
     
     def invoke(self, context, event):
         self.files = []

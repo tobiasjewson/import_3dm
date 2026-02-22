@@ -161,17 +161,30 @@ def get_or_create_iddata(
         tag_data(theitem, tag_dict)
     return theitem
 
-def _collect_valid_guids(model):
+def _collect_valid_guids(model, options=None):
     """Build a set of all valid GUIDs from the .3dm model."""
     # Imported here to avoid circular import (material.py imports utils.py)
     from .material import DEFAULT_RHINO_MATERIAL_ID, DEFAULT_RHINO_TEXT_MATERIAL_ID
+    if options is None:
+        options = {}
+    remove_hidden_objects = options.get("remove_hidden_objects", False)
+    remove_hidden_layers = options.get("remove_hidden_layers", False)
     valid = set()
 
-    for ob in model.Objects:
-        valid.add(str(ob.Attributes.Id))
-
+    # Build set of hidden layer indices if needed
+    hidden_layer_indices = set()
     for layer in model.Layers:
-        valid.add(str(layer.Id))
+        if remove_hidden_layers and not layer.Visible:
+            hidden_layer_indices.add(layer.Index)
+        else:
+            valid.add(str(layer.Id))
+
+    for ob in model.Objects:
+        if remove_hidden_objects and not ob.Attributes.Visible:
+            continue
+        if remove_hidden_layers and ob.Attributes.LayerIndex in hidden_layer_indices:
+            continue
+        valid.add(str(ob.Attributes.Id))
 
     for mat in model.Materials:
         valid.add(str(mat.Id))
@@ -201,9 +214,9 @@ def _remove_stale_from(collection, valid_guids):
         collection.remove(item)
 
 
-def remove_stale_data(context, model):
+def remove_stale_data(context, model, options=None):
     """Remove Blender data whose Rhino GUID is no longer in the .3dm file."""
-    valid_guids = _collect_valid_guids(model)
+    valid_guids = _collect_valid_guids(model, options)
 
     # Annotation text children (rhname starting with "TXT") have synthetic GUIDs
     # that don't exist in the .3dm model. We keep them as long as their parent
