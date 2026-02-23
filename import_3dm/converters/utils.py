@@ -23,11 +23,12 @@
 # *** data tagging
 
 import bpy
+import json
 import uuid
 import rhino3dm as r3d
 from mathutils import Matrix
 
-from typing import Any, Dict
+from typing import Any, Dict, Set, Tuple
 
 
 def _get_rhid(idblock):
@@ -36,6 +37,13 @@ def _get_rhid(idblock):
     if rhid is None or rhid == "None":
         return None
     return rhid
+
+_current_source: str = ""
+
+def set_source(source: str) -> None:
+    """Set the source identifier for the current import session."""
+    global _current_source
+    _current_source = source
 
 def tag_data(
         idblock : bpy.types.ID,
@@ -57,6 +65,7 @@ def tag_data(
     idblock['rhparentid'] = str(parentid)
     idblock['rhidef'] = is_idef
     idblock['rhmat_from_object'] = tag_dict.get('rhmat_from_object', True)
+    idblock['rhsrc'] = _current_source
 
 def create_tag_dict(
         guid            : uuid.UUID,
@@ -84,8 +93,9 @@ def create_tag_dict(
 all_dict = dict()
 
 def clear_all_dict() -> None:
-    global all_dict
+    global all_dict, _current_source
     all_dict = dict()
+    _current_source = ""
 
 def reset_all_dict(context : bpy.types.Context) -> None:
     global all_dict
@@ -201,12 +211,18 @@ def _collect_valid_guids(model, options=None):
     return valid
 
 
-def _remove_stale_from(collection, valid_guids):
-    """Remove items from a Blender collection whose rhid is no longer valid."""
+def _remove_stale_from(collection, valid_guids, source: str = ""):
+    """Remove items from a Blender collection whose rhid is no longer valid.
+
+    If source is given, only items tagged with that source are candidates for
+    removal; items from other source files are left untouched.
+    """
     to_remove = []
     for item in collection:
         rhid = _get_rhid(item)
         if rhid is None:
+            continue
+        if source and item.get("rhsrc", "") != source:
             continue
         if rhid not in valid_guids:
             to_remove.append(item)
@@ -215,8 +231,16 @@ def _remove_stale_from(collection, valid_guids):
 
 
 def remove_stale_data(context, model, options=None):
-    """Remove Blender data whose Rhino GUID is no longer in the .3dm file."""
+    """Remove Blender data whose Rhino GUID is no longer in the .3dm file.
+
+    Only objects tagged with the current source (options["rh_source"]) are
+    candidates for removal; objects from other imported .3dm files are left
+    untouched.
+    """
+    if options is None:
+        options = {}
     valid_guids = _collect_valid_guids(model, options)
+    source = options.get("rh_source", "")
 
     # Annotation text children (rhname starting with "TXT") have synthetic GUIDs
     # that don't exist in the .3dm model. We keep them as long as their parent
@@ -232,6 +256,9 @@ def remove_stale_data(context, model, options=None):
     for ob in context.blend_data.objects:
         rhid = _get_rhid(ob)
         if rhid is None:
+            continue
+        # Only consider objects from the current source file
+        if source and ob.get("rhsrc", "") != source:
             continue
         if rhid in valid_guids:
             continue
@@ -259,9 +286,67 @@ def remove_stale_data(context, model, options=None):
             elif isinstance(data, bpy.types.Light):
                 context.blend_data.lights.remove(data)
 
-    # 2. Remove stale collections and materials
-    _remove_stale_from(context.blend_data.collections, valid_guids)
-    _remove_stale_from(context.blend_data.materials, valid_guids)
+    # 2. Remove stale collections and materials (filtered by source)
+    _remove_stale_from(context.blend_data.collections, valid_guids, source)
+    _remove_stale_from(context.blend_data.materials, valid_guids, source)
+
+
+def get_import_state(context, source: str) -> Tuple[Set[str], Set[str]]:
+    """Return (imported, excluded) sets for the given source from scene state."""
+    raw = context.scene.get("rh_import_state", None)
+    if raw is None:
+        return set(), set()
+    try:
+        state = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return set(), set()
+    entry = state.get(source, {})
+    imported = set(entry.get("imported", []))
+    excluded = set(entry.get("excluded", []))
+    return imported, excluded
+
+
+def save_import_state(context, source: str, imported: Set[str], excluded: Set[str]) -> None:
+    """Persist (imported, excluded) sets for the given source into the scene."""
+    raw = context.scene.get("rh_import_state", None)
+    if raw is None:
+        state = {}
+    else:
+        try:
+            state = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            state = {}
+    state[source] = {
+        "imported": list(imported),
+        "excluded": list(excluded),
+    }
+    context.scene["rh_import_state"] = json.dumps(state)
+
+
+def detect_new_exclusions(
+        context,
+        source: str,
+        valid_guids: Set[str],
+        previously_imported: Set[str],
+        excluded: Set[str],
+) -> Set[str]:
+    """Detect GUIDs that were imported before but have since been manually deleted.
+
+    A GUID counts as manually deleted when it:
+    - was imported on the last run (in previously_imported)
+    - is still present in the .3dm file (in valid_guids)
+    - is no longer present as a Blender object tagged with this source
+    - has not already been excluded
+
+    Returns the updated excluded set.
+    """
+    currently_present = {
+        obj["rhid"]
+        for obj in context.scene.objects
+        if obj.get("rhsrc", "") == source and obj.get("rhid") not in (None, "None")
+    }
+    newly_deleted = (previously_imported & valid_guids) - currently_present - excluded
+    return excluded | newly_deleted
 
 
 def matrix_from_xform(xform : r3d.Transform):

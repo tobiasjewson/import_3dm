@@ -70,8 +70,6 @@ def read_3dm(
         options : Dict[str, Any]
     )   -> Set[str]:
 
-    converters.initialize(context)
-
     # Parse options
     import_views = options.get("import_views", False)
     import_annotations = options.get("import_annotations", False)
@@ -98,11 +96,39 @@ def read_3dm(
         print("Failed to import .3dm model: {}".format(filepath))
         return {'CANCELLED'}
 
-
+    # TODO: Cleanup
+    print("StartSectionComments", model.StartSectionComments)
+    print("ApplicationDetails", model.ApplicationDetails)
+    print("ArchiveVersion", model.ArchiveVersion)
+    print("Revision", model.Revision)
+    print("Strings", model.Strings)
+    print("notes", model.ReadNotes(filepath))
     # place model in context so we can access it when we need to
     # find data from different tables, like for instance dimension
     # styles while working on annotation import.
     options["rh_model"] = model
+
+    # Compute a stable source identifier from file-embedded metadata and
+    # register it before initializing converters so every tagged object
+    # carries the correct rhsrc value from the start.
+    source = f"{model.Created}_{model.CreatedBy}"
+    options["rh_source"] = source
+    converters.utils.set_source(source)
+
+    converters.initialize(context)
+
+    # --- Deletion exclusion detection ---
+    # Load the persisted import state for this source file.
+    previously_imported, excluded = converters.utils.get_import_state(context, source)
+    if options.get("reset_exclusions", False):
+        excluded = set()
+    valid_guids = converters.utils._collect_valid_guids(model, options)
+    excluded = converters.utils.detect_new_exclusions(
+        context, source, valid_guids, previously_imported, excluded
+    )
+    # Save updated exclusions immediately so they survive even if import errors out.
+    converters.utils.save_import_state(context, source, previously_imported, excluded)
+    options["excluded_guids"] = excluded
 
     toplayer = create_or_get_top_layer(context, filepath)
 
@@ -130,6 +156,7 @@ def read_3dm(
         converters.handle_instance_definitions(context, model, toplayer, "Instance Definitions")
 
     # Handle objects
+    imported_this_run: Set[str] = set()
     ob : r3d.File3dmObject = None
     for ob in model.Objects:
         og : r3d.GeometryBase = ob.Geometry
@@ -207,8 +234,11 @@ def read_3dm(
         if og.ObjectType==r3d.ObjectType.InstanceReference and import_instances:
             object_name = model.InstanceDefinitions.FindId(og.ParentIdefId).Name
 
-        # Convert object
-        converters.convert_object(context, ob, object_name, layer, blender_material, view_color, scale, options)
+        # Convert object (skips excluded GUIDs internally)
+        guid_str = str(ob.Attributes.Id)
+        if guid_str not in excluded:
+            converters.convert_object(context, ob, object_name, layer, blender_material, view_color, scale, options)
+            imported_this_run.add(guid_str)
 
         if import_groups:
             converters.handle_groups(context,attr,toplayer,import_nested_groups)
@@ -229,6 +259,9 @@ def read_3dm(
         with context.temp_override(selected_editable_objects=toplayer.all_objects):
             bpy.ops.object.shade_smooth()
         bpy.context.view_layer.objects.active = active_object
+
+    # Persist the final imported set for this source.
+    converters.utils.save_import_state(context, source, imported_this_run, excluded)
 
     if options.get("remove_deleted", False):
         converters.remove_stale_data(context, model, options)

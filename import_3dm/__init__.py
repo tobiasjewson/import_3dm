@@ -239,6 +239,12 @@ class Import3dm(Operator, ImportHelper):
         default=False,
     ) # type: ignore
 
+    reset_exclusions: BoolProperty(
+        name="Reset Exclusion List",
+        description="Clear the list of manually-deleted objects so they will be re-imported on this run",
+        default=False,
+    ) # type: ignore
+
     @classmethod
     def poll(cls, context: bpy.types.Context):
         return context.mode == "OBJECT"
@@ -318,6 +324,10 @@ class Import3dm(Operator, ImportHelper):
         sub.active = self.remove_deleted
         sub.prop(self, "remove_hidden_objects")
         sub.prop(self, "remove_hidden_layers")
+
+        box = layout.box()
+        box.label(text="Import History")
+        box.prop(self, "reset_exclusions")
     
     def invoke(self, context, event):
         self.files = []

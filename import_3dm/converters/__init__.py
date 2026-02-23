@@ -82,6 +82,9 @@ def convert_object(
     collection given by layer
     """
 
+    if str(ob.Attributes.Id) in options.get("excluded_guids", set()):
+        return
+
     update_materials = options.get("update_materials", False)
     link_materials_to = options.get("link_materials_to", "PREFERENCES")
     data = None
